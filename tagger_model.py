@@ -281,7 +281,7 @@ with tf.Session() as sess:
         # __________________________________________________________________________________________
         # Apply early stopping
 
-        early_stopping.update(validation_f1_score)
+        early_stopping.update(-validation_f1_score)
 
         # __________________________________________________________________________________________
         # Save and test miss-classification on test set
