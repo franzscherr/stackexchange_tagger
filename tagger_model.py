@@ -60,7 +60,7 @@ test_only = False
 p = dict()
 if not test_only:
     p['n_iterations'] = 3000
-    p['dbn_iterations'] = [1000, 1000]
+    p['dbn_iterations'] = [2000, 2000]
 else:
     p['n_iterations'] = 0
     p['dbn_iterations'] = [0, 0]
@@ -69,7 +69,7 @@ p['learning_rate_end'] = 1e-3
 p['batch_size'] = 2000
 p['test_batch_size_max'] = 1000
 p['parameter_penalty_contribution'] = 0
-p['layer_sizes'] = [1000, 600, 1000, n_tags]
+p['layer_sizes'] = [1000, 800, 800, n_tags]
 p['dbn_layer_count'] = 2
 p['use_lsa'] = False
 p['use_dbn'] = True
@@ -221,6 +221,7 @@ with tf.Session() as sess:
         logger.info('DBN end')
 
     training_ce_errors = []
+    training_f1_scores = []
     validation_ce_errors = []
     validation_f1_scores = []
     tag_fault = np.ones((1, n_tags))
@@ -257,7 +258,7 @@ with tf.Session() as sess:
         feed_dict[tag_mask] = mask
         feed_dict[learning_rate_placeholder] = learning_rate
         feed_dict[keep_probability_placeholder] = .8
-        _, ce_err = sess.run([train_step, error], feed_dict=feed_dict)
+        _, ce_err, train_f1_score = sess.run([train_step, error, f1_score], feed_dict=feed_dict)
 
         # __________________________________________________________________________________________
         # Validation on validation set
@@ -275,6 +276,7 @@ with tf.Session() as sess:
         ce_validation_error, validation_f1_score = sess.run([error, f1_score], feed_dict=feed_dict)
 
         training_ce_errors.append(ce_err)
+        training_f1_scores.append(train_f1_score)
         validation_ce_errors.append(ce_validation_error)
         validation_f1_scores.append(validation_f1_score)
 
@@ -308,8 +310,9 @@ with tf.Session() as sess:
 
             with open(os.path.join(project_dir, 'train_log.npz'), 'wb') as f:
                 np.savez(f, training_cross_entropy_error=np.array(training_ce_errors),
-                         validation_ce_errors=np.array(validation_ce_errors),
-                         validation_f1_scores=np.array(validation_f1_scores))
+                         validation_cross_entropy_errors=np.array(validation_ce_errors),
+                         validation_f1_scores=np.array(validation_f1_scores),
+                         training_f1_scores=np.array(training_f1_scores))
             batch_indices = np.random.randint(0, train_data.shape[0], size=test_batch_size)
             document_batch = train_data[batch_indices]
             if hasattr(document_batch, 'todense'):

@@ -24,7 +24,7 @@ class EarlyStopping(object):
             self.abort = False
         else:
             self.consecutive_steps += 1
-            if self.consecutive_steps >= 5:
+            if self.consecutive_steps >= self.n_consecutive_steps:
                 self.abort = True
 
     def should_save(self):
