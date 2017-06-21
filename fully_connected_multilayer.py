@@ -28,7 +28,7 @@ class FullyConnectedMultilayer(object):
                                     initialize random. Each element of the list is a weight matrix: n_input x n_output
         :param initial_bias_list: A list of biases that are sequentially used to init the biases, if None -> random
                                   Each element of the list should be a one dimensional vector holding the biases.
-        :param batch_normalize: Use batch normalization
+        :param batch_normalize: Use batch normalization, boolean or list of booleans
         :param stop_gradient_after_layer: If given apply a stop_gradient operation after given layer
         :param initial_batch_normalization_parameters: A list for each layer containing tuples of the biases and
                                                        variances: [(alpha, beta), ...]. If None -> random
@@ -74,6 +74,8 @@ class FullyConnectedMultilayer(object):
                             h = activation[i](h, name='activation')
                         else:
                             h = activation(h, name='activation')
+                        if type(batch_normalize) is list and batch_normalize[i] or batch_normalize:
+                            h = tf.layers.batch_normalization(h)
 
                     current_layer_size = layer_size
                     current_layer = h

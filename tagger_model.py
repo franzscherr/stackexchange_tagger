@@ -10,6 +10,9 @@ import numpy as np
 from scipy import sparse, linalg
 from sklearn.model_selection import train_test_split
 import logging
+import time
+import pickle
+import yaml
 
 from vectorspacemodel import StackExchangeVectorSpace
 from fully_connected_multilayer import FullyConnectedMultilayer
@@ -28,49 +31,18 @@ logger.setLevel(logging.INFO)
 
 
 # directory = 'chess.stackexchange.com'
-directory = '/run/media/scherr/Daten/kddm/askubuntu.com'
-# directory = '/run/media/scherr/Daten/kddm/android.stackexchange.com'
+# directory = '/run/media/scherr/Daten/kddm/askubuntu.com'
+directory = '/run/media/scherr/Daten/kddm/android.stackexchange.com'
 vsm = StackExchangeVectorSpace(directory_path=directory, significance_limit_min=100, significance_limit_max_factor=.75)
+
+# project_dir = time.strftime('tagger_model_%Y-%m-%d_%H-%M-%S')
+project_dir = 'default_tagger_model'
 
 print('number of supervised samples: {}'.format(vsm.supervised_data.shape[0]))
 print('number of terms: {:6d}'.format(vsm.supervised_data.shape[-1]))
 print('number of tags: {:6d}'.format(vsm.target.shape[-1]))
 print('----------------------')
-
-n_documents = vsm.supervised_data.shape[0]
-n_input = vsm.supervised_data.shape[1]
-n_tags = vsm.target.shape[1]
-test_only = False
-if not test_only:
-    n_iterations = 1000
-    dbn_iterations = [0, 0]
-else:
-    n_iterations = 0
-    dbn_iterations = [0, 0]
-learning_rate = 1e-2
-learning_rate_end = 1e-3
-batch_size = 2000
-test_batch_size_max = 1000
-parameter_penalty_contribution = .1
-
-# __________________________________________________________________________________________________
-# Apply latent semantic analysis
-# import sklearn.decomposition as dec
-n_input = 200
-# svd = dec.TruncatedSVD(n_components=n_input)
-# svd.fit(vsm.data)
-# vsm.supervised_data = svd.transform(vsm.supervised_data)
-
-# del vsm.supervised_data
-# del vsm.unsupervised_data
-# del vsm.data
-# vsm.supervised_data = np.load(os.path.join(directory, 'lsa_data.npz'))['lsa_data']
-# n_input = vsm.supervised_data.shape[1]
-
-_, _, vectors = sparse.linalg.svds(vsm.data, n_input)
-vsm.supervised_data = vsm.supervised_data.dot(vectors.T)
-del vsm.data
-del vsm.unsupervised_data
+print('Project directory is: {}'.format(project_dir))
 
 # __________________________________________________________________________________________________
 # Accept only tags that are at least 200 in count
@@ -80,6 +52,63 @@ tag_sum_sorted = tag_sum[sorted_indices]
 n_tags = np.sum(tag_sum > 10)
 vsm.target = vsm.target[:, sorted_indices[:n_tags]]
 print('New tag count: {}'.format(n_tags))
+
+n_documents = vsm.supervised_data.shape[0]
+n_input = vsm.supervised_data.shape[1]
+n_tags = vsm.target.shape[1]
+test_only = False
+p = dict()
+if not test_only:
+    p['n_iterations'] = 3000
+    p['dbn_iterations'] = [1000, 1000]
+else:
+    p['n_iterations'] = 0
+    p['dbn_iterations'] = [0, 0]
+p['learning_rate'] = 1e-2
+p['learning_rate_end'] = 1e-3
+p['batch_size'] = 2000
+p['test_batch_size_max'] = 1000
+p['parameter_penalty_contribution'] = 0
+p['layer_sizes'] = [1000, 600, 1000, n_tags]
+p['dbn_layer_count'] = 2
+p['use_lsa'] = False
+p['use_dbn'] = True
+p['lsa_components'] = 600
+p['dbn_batch_size'] = 100
+
+config_file_name = 'config.yaml'
+load = False
+if os.path.exists(os.path.join(project_dir, config_file_name)) and load:
+    with open(os.path.join(project_dir, config_file_name), 'r') as f:
+        p = yaml.load(f.read())
+        logger.info('restored config from {}'.format(f.name))
+else:
+    os.makedirs(project_dir, exist_ok=True)
+    with open(os.path.join(project_dir, config_file_name), 'w') as f:
+        yaml.dump(p, f, default_flow_style=False)
+
+n_iterations = p['n_iterations']
+dbn_iterations = p['dbn_iterations']
+learning_rate = p['learning_rate']
+learning_rate_end = p['learning_rate_end']
+batch_size = p['batch_size']
+test_batch_size_max = p['test_batch_size_max']
+parameter_penalty_contribution = p['parameter_penalty_contribution']
+layer_sizes = p['layer_sizes']
+dbn_layer_count = p['dbn_layer_count']
+use_lsa = p['use_lsa']
+use_dbn = p['use_dbn']
+lsa_components = p['lsa_components']
+dbn_batch_size = p['dbn_batch_size']
+
+# __________________________________________________________________________________________________
+# Apply latent semantic analysis
+if use_lsa:
+    n_input = lsa_components
+    _, _, vectors = sparse.linalg.svds(vsm.data, n_input)
+    vsm.supervised_data = vsm.supervised_data.dot(vectors.T)
+    del vsm.data
+    del vsm.unsupervised_data
 
 # __________________________________________________________________________________________________
 # Gradient descent very sensible to ratio of tags given in batch, hence sparse data like these
@@ -103,18 +132,26 @@ target_placeholder = tf.placeholder(dtype=tf.float32, shape=(None, n_tags), name
 tag_mask = tf.placeholder(dtype=tf.float32, shape=(1, n_tags), name='tag_mask')
 
 keep_probability_placeholder = tf.placeholder(dtype=tf.float32)
-layer_sizes = [1000, 1000, n_tags]
 
 dbn = None
-if len(layer_sizes) > 1:
-    dbn = DBN(layer_sizes[:-1], document_placeholder, n_fantasy_states=batch_size, learning_rate=1e-4,
-              persistent_contrastive_divergence=False, constrastive_divergence_level=3)
-network = FullyConnectedMultilayer(layer_sizes, document_placeholder, activation=tf.nn.elu,
-                                   stop_gradient_after_layer=None,
+if use_dbn and len(layer_sizes) > dbn_layer_count:
+    dbn = DBN(layer_sizes[:dbn_layer_count], document_placeholder, n_fantasy_states=dbn_batch_size, learning_rate=1e-2,
+              persistent_contrastive_divergence=False, constrastive_divergence_level=1)
+
+if use_dbn:
+    activation_functions = [tf.nn.sigmoid] * (dbn_layer_count - 1) + [tf.nn.elu] * (len(layer_sizes) - dbn_layer_count)
+    stop_after = dbn_layer_count - 1
+    batch_normalize = [False] * (dbn_layer_count - 1) + [True] * (len(layer_sizes) - dbn_layer_count)
+else:
+    activation_functions = tf.nn.elu
+    stop_after = None
+    batch_normalize = True
+network = FullyConnectedMultilayer(layer_sizes, document_placeholder, activation=activation_functions,
+                                   stop_gradient_after_layer=stop_after, batch_normalize=batch_normalize,
                                    keep_probability_placeholder=keep_probability_placeholder)
 error = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
-    labels=target_placeholder, logits=network.output) * tag_mask, name='error')   # + \
-        # parameter_penalty_contribution * network.parameter_norm()
+    labels=target_placeholder, logits=network.output) * tag_mask, name='error') + \
+        parameter_penalty_contribution * network.parameter_norm()
         # 10 * tf.reduce_mean((tf.reduce_sum(tf.sigmoid(network.output), axis=-1) -
         #                     tf.reduce_sum(target_placeholder, axis=-1))**2)
 prediction = tf.round(tf.sigmoid(network.output)) * tag_mask
@@ -132,17 +169,19 @@ train_step = tf.train.AdamOptimizer(learning_rate_placeholder).minimize(error)
 
 save = False
 saver = tf.train.Saver() if save else None
-save_dir = './model_saved_state' if save else None
+save_dir = os.path.join(project_dir, 'model_saved_state') if save else None
 save_path = os.path.join(save_dir, 'model.cpkt') if save else None
 
-early_stopping = EarlyStopping(n_consecutive_steps=5)
+early_stopping = EarlyStopping(n_consecutive_steps=100)
 
 
 def create_equalized_batch(tag_ind):
     t_mask = np.zeros((1, n_tags))
     t_mask[0, tag_ind] = 1
 
-    tag_target = train_target[:, tag_ind].todense()
+    tag_target = train_target[:, tag_ind]
+    if hasattr(tag_target, 'todense'):
+        tag_target = tag_target.todense()
     indices = np.where(tag_target == 1)[0]
     not_indices = np.where(tag_target == 0)[0]
     if indices.shape[0] < 10:
@@ -150,8 +189,12 @@ def create_equalized_batch(tag_ind):
     indices = np.random.choice(indices, size=int(np.ceil(batch_size/2)))
     not_indices = np.random.choice(not_indices, size=int(np.floor(batch_size/2)))
     indices = np.concatenate((indices, not_indices))
-    t_batch = train_data[indices, :].todense()
-    t_target = train_target[indices, :].todense()
+    t_batch = train_data[indices, :]
+    if hasattr(t_batch, 'todense'):
+        t_batch = t_batch.todense()
+    t_target = train_target[indices, :]
+    if hasattr(t_target, 'todense'):
+        t_target = t_target.todense()
 
     return t_batch, t_target, t_mask
 
@@ -168,14 +211,18 @@ with tf.Session() as sess:
     # ______________________________________________________________________________________________
     # Training
 
-    if len(layer_sizes) > 100: # TODO
+    if use_dbn:
         logger.info('DBN start')
-        dbn.train(sess, dbn_iterations, vsm.unsupervised_data, 500, saver=saver, save_path=save_path)
+        reconstruction_errors = dbn.train(sess, dbn_iterations, vsm.unsupervised_data, saver=saver, save_path=save_path,
+                                          batch_size=dbn_batch_size)
+        with open(os.path.join(project_dir, 'dbn_reconstruction_errors.pkl'), 'wb') as f:
+            pickle.dump(reconstruction_errors, f)
         network.transfer_from_dbn(sess, dbn)
         logger.info('DBN end')
 
     training_ce_errors = []
     validation_ce_errors = []
+    validation_f1_scores = []
     tag_fault = np.ones((1, n_tags))
     if n_iterations != 0:
         learning_rate_decay = np.power(learning_rate_end / learning_rate, 1 / n_iterations)
@@ -225,15 +272,16 @@ with tf.Session() as sess:
         feed_dict[target_placeholder] = validation_target[batch_indices]
         if hasattr(feed_dict[target_placeholder], 'todense'):
             feed_dict[target_placeholder] = feed_dict[target_placeholder].todense()
-        ce_validation_error = sess.run(error, feed_dict=feed_dict)
+        ce_validation_error, validation_f1_score = sess.run([error, f1_score], feed_dict=feed_dict)
 
         training_ce_errors.append(ce_err)
         validation_ce_errors.append(ce_validation_error)
+        validation_f1_scores.append(validation_f1_score)
 
         # __________________________________________________________________________________________
         # Apply early stopping
 
-        early_stopping.update(ce_validation_error)
+        early_stopping.update(validation_f1_score)
 
         # __________________________________________________________________________________________
         # Save and test miss-classification on test set
@@ -258,23 +306,23 @@ with tf.Session() as sess:
             logger.info('train error in iteration {} of {} is {:.4f}'.format(i, n_iterations, ce_err))
             logger.info('f1 score of validation in iteration {} of {} is {:.4f}'.format(i, n_iterations, f1_score_run))
 
+            with open(os.path.join(project_dir, 'train_log.npz'), 'wb') as f:
+                np.savez(f, training_cross_entropy_error=np.array(training_ce_errors),
+                         validation_ce_errors=np.array(validation_ce_errors),
+                         validation_f1_scores=np.array(validation_f1_scores))
             batch_indices = np.random.randint(0, train_data.shape[0], size=test_batch_size)
             document_batch = train_data[batch_indices]
             if hasattr(document_batch, 'todense'):
                 document_batch = document_batch.todense()
-            # document_batch[document_batch.nonzero()] = 1
             feed_dict[document_placeholder] = document_batch
             feed_dict[target_placeholder] = train_target[batch_indices]
             if hasattr(feed_dict[target_placeholder], 'todense'):
                 feed_dict[target_placeholder] = feed_dict[target_placeholder].todense()
-            feed_dict[keep_probability_placeholder] = 1.
             f1_score_run = sess.run(f1_score, feed_dict=feed_dict)
             logger.info('f1 score of train in iteration {} of {} is {:.4f}'.format(i, n_iterations, f1_score_run))
-            # logger.info('test miss-classification rate in iteration {} of {} is {:7.5f}'.
-            #             format(i, n_iterations, 1-classification_rate_run))
 
-        # if early_stopping.should_abort():
-        #     break
+        if early_stopping.should_abort():
+            print('stop')
 
     # ______________________________________________________________________________________________
     # Testing

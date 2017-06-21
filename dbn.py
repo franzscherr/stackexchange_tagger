@@ -47,6 +47,7 @@ class DBN(object):
 
     def train(self, session, training_iterations, training_samples, batch_size=100, saver=None, save_path=None,
               testing_samples=None, testing_batch_size=None):
+        reconstruction_errors = []
         if testing_samples is None:
             testing_samples = training_samples
         if testing_batch_size is None:
@@ -56,6 +57,7 @@ class DBN(object):
             if i >= len(self.machines):
                 break
             rbm = self.machines[i]
+            reconstruction_errors_layer = []
             for j in range(n_iterations):
                 batch_indices = np.random.randint(0, training_samples.shape[0], size=batch_size)
                 batch = training_samples[batch_indices]
@@ -70,12 +72,15 @@ class DBN(object):
                         testing_batch = testing_batch.todense()
                     reconstruction_error = session.run(rbm.reconstruction_error,
                                                        feed_dict={self.machines[0].visible_placeholder: testing_batch})
+                    reconstruction_errors_layer.append(reconstruction_error)
                     logger.info('reconstruction error in layer {} in iteration {} of {} is {:.4f}'.
                                 format(i, j, n_iterations, reconstruction_error))
                 if j % 500 == 0 and saver is not None:
                     saver.save(session, save_path=save_path)
                     logger.info('saved model')
+            reconstruction_errors.append(reconstruction_errors_layer)
         logger.info('training done')
+        return reconstruction_errors
 
     def sample(self, session, n_samples=1, hidden_seed_binary=True):
         n_last_hidden = self.machines[-1].n_hidden
