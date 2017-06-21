@@ -35,8 +35,8 @@ logger.setLevel(logging.INFO)
 directory = '/run/media/scherr/Daten/kddm/android.stackexchange.com'
 vsm = StackExchangeVectorSpace(directory_path=directory, significance_limit_min=100, significance_limit_max_factor=.75)
 
-# project_dir = time.strftime('tagger_model_%Y-%m-%d_%H-%M-%S')
-project_dir = 'default_tagger_model'
+project_dir = time.strftime('tagger_model_%Y-%m-%d_%H-%M-%S')
+# project_dir = 'default_tagger_model'
 
 print('number of supervised samples: {}'.format(vsm.supervised_data.shape[0]))
 print('number of terms: {:6d}'.format(vsm.supervised_data.shape[-1]))
@@ -59,7 +59,7 @@ n_tags = vsm.target.shape[1]
 test_only = False
 p = dict()
 if not test_only:
-    p['n_iterations'] = 3000
+    p['n_iterations'] = 5000
     p['dbn_iterations'] = [2000, 2000]
 else:
     p['n_iterations'] = 0
@@ -71,9 +71,9 @@ p['test_batch_size_max'] = 1000
 p['parameter_penalty_contribution'] = 0
 p['layer_sizes'] = [1000, 800, 800, n_tags]
 p['dbn_layer_count'] = 2
-p['use_lsa'] = False
-p['use_dbn'] = True
-p['lsa_components'] = 600
+p['use_lsa'] = True
+p['use_dbn'] = False
+p['lsa_components'] = 1000
 p['dbn_batch_size'] = 100
 
 config_file_name = 'config.yaml'
@@ -172,7 +172,7 @@ saver = tf.train.Saver() if save else None
 save_dir = os.path.join(project_dir, 'model_saved_state') if save else None
 save_path = os.path.join(save_dir, 'model.cpkt') if save else None
 
-early_stopping = EarlyStopping(n_consecutive_steps=100)
+early_stopping = EarlyStopping(n_consecutive_steps=500)
 
 
 def create_equalized_batch(tag_ind):
@@ -198,6 +198,7 @@ def create_equalized_batch(tag_ind):
 
     return t_batch, t_target, t_mask
 
+restore = False
 with tf.Session() as sess:
     sess.run(tf.global_variables_initializer())
 
@@ -325,11 +326,17 @@ with tf.Session() as sess:
             logger.info('f1 score of train in iteration {} of {} is {:.4f}'.format(i, n_iterations, f1_score_run))
 
         if early_stopping.should_abort():
-            print('stop')
+            restore = True
+            break
 
     # ______________________________________________________________________________________________
-    # Testing
-
+    # Testing - restore good setting
+    if restore and save:
+        if os.path.exists(save_dir):
+            saver.restore(sess, save_path=save_path)
+            logger.info('-- model restored from {}'.format(save_path))
+        else:
+            os.makedirs(save_dir)
     logger.info('Testing starts')
     testing_samples = test_data.shape[0]
     if testing_samples > 100000:
