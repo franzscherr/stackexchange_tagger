@@ -12,7 +12,7 @@ from dbn import DBN
 class FullyConnectedMultilayer(object):
     def __init__(self, layer_sizes, input_tensor, activation=tf.nn.elu, keep_probability_placeholder=None,
                  last_part=True, name='fully_connected', initial_weight_list=None, initial_bias_list=None,
-                 batch_normalize=False, initial_batch_normalization_parameters=None):
+                 batch_normalize=False, stop_gradient_after_layer=None, initial_batch_normalization_parameters=None):
         """
         Implements a fully connected multilayer network.
         
@@ -29,6 +29,7 @@ class FullyConnectedMultilayer(object):
         :param initial_bias_list: A list of biases that are sequentially used to init the biases, if None -> random
                                   Each element of the list should be a one dimensional vector holding the biases.
         :param batch_normalize: Use batch normalization
+        :param stop_gradient_after_layer: If given apply a stop_gradient operation after given layer
         :param initial_batch_normalization_parameters: A list for each layer containing tuples of the biases and
                                                        variances: [(alpha, beta), ...]. If None -> random
         """
@@ -76,6 +77,8 @@ class FullyConnectedMultilayer(object):
 
                     current_layer_size = layer_size
                     current_layer = h
+                    if stop_gradient_after_layer is not None and stop_gradient_after_layer == i:
+                        current_layer = tf.stop_gradient(current_layer, name='stop_gradient')
         self.output = current_layer
 
     def parameter_norm(self, norm_type='l2'):
@@ -86,7 +89,7 @@ class FullyConnectedMultilayer(object):
         :return: A tensorflow node representing the total parameter norm
         """
         if norm_type == 'l2':
-            return sum(map(tf.nn.l2_loss, self.weights)) + sum(map(tf.nn.l2_loss, self.biases))
+            return sum(map(tf.nn.l2_loss, self.weights))
         else:
             raise NotImplementedError('Currently other norm than l2')
 

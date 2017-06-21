@@ -5,8 +5,13 @@
 
 import numpy as np
 import tensorflow as tf
+import logging
 
 from adam import ADAMOptimizer
+
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class RBM(object):
@@ -98,8 +103,8 @@ class RBM(object):
             gradient_b_v = tf.reduce_mean(self.visible_placeholder, reduction_indices=0) - tf.reduce_mean(
                 self.visible_state_minus, reduction_indices=0)
 
-            # difference between expected correlation and actual correlation
-            self.reconstruction_error = tf.reduce_mean((self.visible_placeholder - self.visible_state_minus)**2)
+            self.reconstruction_error = tf.reduce_mean(tf.reduce_sum(
+                (self.visible_placeholder - self.visible_state_minus)**2, axis=-1))
             #
             # # update
             # self.update_w = tf.assign_add(self.w, self.learning_rate * gradient_w)
@@ -122,8 +127,7 @@ class RBM(object):
     def _sample_from(vector, name):
         return tf.cast(tf.less(tf.random_uniform(tf.shape(vector)), vector), tf.float32, name=name)
 
-    def train(self, features, n_iterations=1000, batch_size=100, session=None, print_progress=False,
-              learning_rate=None):
+    def train(self, features, n_iterations=1000, batch_size=100, session=None):
         """
         Perform training of the boltzmann machine given an input distribution
         
@@ -131,21 +135,19 @@ class RBM(object):
         :param n_iterations: Number of iterations to train
         :param batch_size: Number of samples to use in one training iteration
         :param session: tensorflow session to use for the training. If None, default will be used.
-        :param print_progress: Show a progress bar on the console
-        :param learning_rate: If given, use this learning rate instead of the constructor specified one.
         """
         if session is None:
             session = tf.get_default_session()
         train_range = range(n_iterations)
         n_samples = features.shape[0]
-        if print_progress:
-            train_range = tqdm.tqdm(train_range)
-        if learning_rate is None:
-            learning_rate = self.learning_rate
         for i in train_range:
             random_indices = np.random.randint(0, n_samples, size=batch_size)
-            feed_dict = {self.visible_placeholder: features[random_indices], self.learning_rate: learning_rate}
-            session.run([self.update_b_h, self.update_w, self.update_b_v], feed_dict=feed_dict)
+            feed_dict = {self.visible_placeholder: features[random_indices]}
+            reconstruction_error, _, _, _ = session.run([self.reconstruction_error, self.update_b_h, self.update_w,
+                                                         self.update_b_v], feed_dict=feed_dict)
+            if i % 20 == 0:
+                logger.info('reconstruction error in iteration {} of {} is {}'.format(i, n_iterations,
+                                                                                      reconstruction_error))
 
     def sample_visible(self, n_samples=None, hidden_states=None, session=None):
         """
